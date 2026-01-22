@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify, Response, stream_with_context
 import re
 import subprocess
-import os
 import sys
+import os
 
 app = Flask(__name__)
 
@@ -14,10 +14,10 @@ def is_valid_tiktok_url(url: str) -> bool:
 
 
 # -----------------------------
-# VIDEO STREAM (AVEC WATERMARK – QUALITÉ MAX)
+# PASS-THROUGH VIDEO STREAM (WITH WATERMARK, HD)
 # -----------------------------
-@app.route("/tiktok/video", methods=["POST"])
-def tiktok_video_watermark_hd():
+@app.route("/tiktok/stream/watermark", methods=["POST"])
+def tiktok_stream_watermark():
     data = request.get_json()
     if not data or "url" not in data:
         return jsonify({"error": "Missing url"}), 400
@@ -30,14 +30,11 @@ def tiktok_video_watermark_hd():
         cmd = [
             sys.executable,
             "-m", "yt_dlp",
-            # 🔑 QUALITÉ MAX (comme sans filigrane)
-            "-f", "bv*+ba/b",
-            "--merge-output-format", "mp4",
-            "-o", "-",
+            "-f", "mp4",              # ⬅️ FORMAT DIRECT (avec watermark)
+            "-o", "-",                # ⬅️ stdout
             "--no-part",
             "--quiet",
-            "--user-agent",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+            "--no-playlist",
             url,
         ]
 
@@ -63,21 +60,29 @@ def tiktok_video_watermark_hd():
         stream_with_context(generate()),
         content_type="video/mp4",
         headers={
-            "Content-Disposition": "attachment; filename=tiktok_watermark_hd.mp4",
+            "Content-Disposition": "attachment; filename=tiktok_watermark.mp4",
             "Cache-Control": "no-store",
             "Accept-Ranges": "none",
         },
     )
 
 
+# -----------------------------
+# Health
+# -----------------------------
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
 
 
+# -----------------------------
+# Run
+# -----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 
