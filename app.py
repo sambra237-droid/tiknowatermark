@@ -1,23 +1,16 @@
-from flask import Flask, request, Response, jsonify, send_file
+from flask import Flask, request, Response, stream_with_context, jsonify
 import subprocess
+import tempfile
 import os
+import sys
 import re
-import uuid
-import yt_dlp
+import shutil
 
-# --------------------------------------------------
-# App
-# --------------------------------------------------
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-TMP_DIR = os.path.join(BASE_DIR, "tmp")
-
-FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "Roboto-Regular.ttf")
-LOGO_PATH = os.path.join(ASSETS_DIR, "tiktok_logo.png")
-
-os.makedirs(TMP_DIR, exist_ok=True)
+FONT_PATH = os.path.join(BASE_DIR, "fonts", "Roboto-Regular.ttf")
+LOGO_PATH = os.path.join(BASE_DIR, "tiktok_logo.png")
 
 MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
@@ -25,14 +18,12 @@ MOBILE_UA = (
     "Mobile/15E148 Safari/604.1"
 )
 
-# --------------------------------------------------
-# Utils
-# --------------------------------------------------
 def is_valid_tiktok_url(url: str) -> bool:
     return bool(re.search(r"(vm\.tiktok\.com|tiktok\.com)", url))
 
 
 def extract_username(url: str) -> str:
+    import yt_dlp
     try:
         with yt_dlp.YoutubeDL({
             "quiet": True,
@@ -45,128 +36,108 @@ def extract_username(url: str) -> str:
         return "tiktok"
 
 
-def safe_remove(path: str):
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-    except Exception:
-        pass
-
-# --------------------------------------------------
-# Route principale
-# --------------------------------------------------
-@app.route("/tiktok/download", methods=["POST"])
-def tiktok_download():
-    data = request.get_json()
+@app.route("/tiktok/stream", methods=["POST"])
+def tiktok_stream():
+    data = request.get_json(silent=True)
     if not data or "url" not in data:
         return jsonify({"error": "Missing url"}), 400
 
-    url = data["url"]
+    url = data["url"].strip()
     if not is_valid_tiktok_url(url):
         return jsonify({"error": "Invalid TikTok URL"}), 400
 
     username = extract_username(url)
-    uid = uuid.uuid4().hex
 
-    raw_path = os.path.join(TMP_DIR, f"raw_{uid}.mp4")
-    final_path = os.path.join(TMP_DIR, f"final_{uid}.mp4")
-
-    # --------------------------------------------------
-    # 1️⃣ Télécharger la vidéo (SANS watermark)
-    # --------------------------------------------------
-    ydl_opts = {
-        "outtmpl": raw_path,
-        "format": "bv*+ba/b",
-        "merge_output_format": "mp4",
-        "user_agent": MOBILE_UA,
-        "quiet": True,
-        "no_warnings": True,
-    }
+    temp_dir = tempfile.mkdtemp(prefix="tiktok_video_")
+    input_video = os.path.join(temp_dir, "input.mp4")
+    output_video = os.path.join(temp_dir, "output.mp4")
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-    except Exception as e:
-        safe_remove(raw_path)
-        return jsonify({"error": "Download failed"}), 500
+        # 1️⃣ Téléchargement stable
+        subprocess.run(
+            [
+                sys.executable,
+                "-m", "yt_dlp",
+                "-f", "bv*+ba/b",
+                "--merge-output-format", "mp4",
+                "--no-part",
+                "--no-playlist",
+                "--user-agent", MOBILE_UA,
+                "-o", input_video,
+                url,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
 
-    if not os.path.exists(raw_path) or os.path.getsize(raw_path) < 100_000:
-        safe_remove(raw_path)
-        return jsonify({"error": "Empty video (TikTok blocked)"}), 500
+        if not os.path.exists(input_video) or os.path.getsize(input_video) < 1024:
+            return jsonify({"error": "Downloaded video is empty"}), 500
 
-    # --------------------------------------------------
-    # 2️⃣ Appliquer le watermark animé façon TikTok
-    # --------------------------------------------------
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", raw_path,
-        "-i", LOGO_PATH,
-        "-filter_complex",
-        (
-            "[1:v]scale=120:-1[logo];"
-            "[0:v][logo]overlay="
+        # 2️⃣ Watermark façon TikTok
+        vf = (
+            f"movie={LOGO_PATH}[logo];"
+            "[in][logo]overlay="
             "x='if(mod(t,6)<3,20,W-w-20)':"
             "y='if(mod(t,6)<3,20,H-h-20)',"
-            "drawtext="
-            f"fontfile={FONT_PATH}:"
+            f"drawtext=fontfile={FONT_PATH}:"
             f"text='@{username}':"
+            "fontcolor=white@0.5:"
             "fontsize=26:"
-            "fontcolor=white@0.45:"
-            "shadowcolor=black@0.5:"
+            "shadowcolor=black@0.6:"
             "shadowx=2:shadowy=2:"
             "x='if(mod(t,6)<3,20,W-tw-20)':"
-            "y='if(mod(t,6)<3,150,H-th-150)'"
-        ),
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        "-c:a", "copy",
-        final_path,
-    ]
+            "y='if(mod(t,6)<3,60,H-th-60)'"
+        )
 
-    subprocess.run(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i", input_video,
+                "-vf", vf,
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "copy",
+                output_video,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
 
-    safe_remove(raw_path)
+        if not os.path.exists(output_video) or os.path.getsize(output_video) < 1024:
+            return jsonify({"error": "Watermark rendering failed"}), 500
 
-    if not os.path.exists(final_path):
-        return jsonify({"error": "Watermark failed"}), 500
-
-    # --------------------------------------------------
-    # 3️⃣ Stream + cleanup
-    # --------------------------------------------------
-    def stream_and_cleanup():
-        try:
-            with open(final_path, "rb") as f:
-                while chunk := f.read(8192):
+        # 3️⃣ Streaming depuis disque
+        def generate():
+            with open(output_video, "rb") as f:
+                while True:
+                    chunk = f.read(8192)
+                    if not chunk:
+                        break
                     yield chunk
-        finally:
-            safe_remove(final_path)
 
-    return Response(
-        stream_and_cleanup(),
-        content_type="video/mp4",
-        headers={
-            "Content-Disposition": "attachment; filename=tiktok_watermarked.mp4",
-            "Cache-Control": "no-store",
-            "Accept-Ranges": "none",
-        },
-    )
+        return Response(
+            stream_with_context(generate()),
+            content_type="video/mp4",
+            headers={
+                "Content-Disposition": "attachment; filename=tiktok_watermarked.mp4",
+                "Cache-Control": "no-store",
+                "Accept-Ranges": "none",
+            },
+        )
 
-# --------------------------------------------------
-# Healthcheck
-# --------------------------------------------------
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
 
-# --------------------------------------------------
-# Run
-# --------------------------------------------------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
