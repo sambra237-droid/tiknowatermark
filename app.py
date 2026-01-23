@@ -17,12 +17,6 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "Roboto-Regular.ttf")
 LOGO_PATH = os.path.join(ASSETS_DIR, "tiktok_logo.png")
 
-MOBILE_UA = (
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
-    "Mobile/15E148 Safari/604.1"
-)
-
 # -----------------------------
 # UTILS
 # -----------------------------
@@ -37,7 +31,6 @@ def extract_username(url: str) -> str:
         with yt_dlp.YoutubeDL({
             "quiet": True,
             "skip_download": True,
-            "user_agent": MOBILE_UA,
         }) as ydl:
             info = ydl.extract_info(url, download=False)
             return info.get("uploader") or "tiktok"
@@ -60,7 +53,7 @@ def tiktok_stream():
 
     username = extract_username(url)
 
-    # Dossier temporaire (Fly.io => /tmp)
+    # Dossier temporaire (/tmp sur Fly.io)
     temp_dir = tempfile.mkdtemp(prefix="tiktok_video_")
     input_video = os.path.join(temp_dir, "input.mp4")
     output_video = os.path.join(temp_dir, "output.mp4")
@@ -77,7 +70,7 @@ def tiktok_stream():
             "--no-part",
             "--no-playlist",
             "--quiet",
-            "-o", video_path,
+            "-o", input_video,
             url,
         ]
 
@@ -132,7 +125,7 @@ def tiktok_stream():
             return jsonify({"error": "Watermark encoding failed"}), 500
 
         # -----------------------------
-        # 3️⃣ STREAMING DU FICHIER FINAL
+        # 3️⃣ STREAMING FINAL (SAFE GUNICORN)
         # -----------------------------
         def generate():
             with open(output_video, "rb") as f:
@@ -154,14 +147,11 @@ def tiktok_stream():
 
     except subprocess.CalledProcessError as e:
         return jsonify({
-            "error": "TikTok blocked video download",
+            "error": "Video download or processing failed",
             "details": e.stderr.decode(errors="ignore"),
-        }), 502
+        }), 500
 
     finally:
-        # -----------------------------
-        # 4️⃣ NETTOYAGE GARANTI
-        # -----------------------------
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -179,6 +169,8 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 
