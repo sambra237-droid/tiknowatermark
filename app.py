@@ -72,17 +72,12 @@ def tiktok_stream():
         download_cmd = [
             sys.executable,
             "-m", "yt_dlp",
-
-            # FORMAT QUI MARCHE (TikTok)
             "-f", "bv*+ba/b",
             "--merge-output-format", "mp4",
-
             "--no-part",
             "--no-playlist",
-            "--no-check-certificates",
-            "--user-agent", MOBILE_UA,
-
-            "-o", input_video,
+            "--quiet",
+            "-o", video_path,
             url,
         ]
 
@@ -184,6 +179,7 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
