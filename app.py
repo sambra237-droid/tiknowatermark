@@ -17,7 +17,6 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "Roboto-Regular.ttf")
 LOGO_PATH = os.path.join(ASSETS_DIR, "tiktok_logo.png")
 
-
 MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
@@ -32,7 +31,7 @@ def is_valid_tiktok_url(url: str) -> bool:
 
 
 def extract_username(url: str) -> str:
-    """Extraction légère (ne bloque pas le download)"""
+    """Extraction légère, non bloquante"""
     try:
         import yt_dlp
         with yt_dlp.YoutubeDL({
@@ -74,12 +73,13 @@ def tiktok_stream():
             sys.executable,
             "-m", "yt_dlp",
 
-            # 🎯 FORMAT STABLE TIKTOK
-            "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]",
+            # FORMAT QUI MARCHE (TikTok)
+            "-f", "bv*+ba/b",
+            "--merge-output-format", "mp4",
 
-            "--impersonate", "chrome",
             "--no-part",
             "--no-playlist",
+            "--no-check-certificates",
             "--user-agent", MOBILE_UA,
 
             "-o", input_video,
@@ -97,7 +97,7 @@ def tiktok_stream():
             return jsonify({"error": "Downloaded video is empty"}), 500
 
         # -----------------------------
-        # 2️⃣ WATERMARK ANIMÉ (TIKTOK STYLE)
+        # 2️⃣ WATERMARK ANIMÉ (STYLE TIKTOK)
         # -----------------------------
         ffmpeg_cmd = [
             "ffmpeg",
@@ -106,19 +106,18 @@ def tiktok_stream():
             "-i", LOGO_PATH,
             "-filter_complex",
             (
-                f"[1:v]scale=40:-1[logo];"
-                f"[0:v][logo]overlay="
-                f"x='if(mod(t,6)<2,20,if(mod(t,6)<4,W-w-20,20))':"
-                f"y='if(mod(t,6)<3,20,H-h-20)',"
-                f"drawtext="
-                f"fontfile={FONT_PATH}:"
+                "[1:v]scale=40:-1[logo];"
+                "[0:v][logo]overlay="
+                "x='if(mod(t,6)<2,20,if(mod(t,6)<4,W-w-20,20))':"
+                "y='if(mod(t,6)<3,20,H-h-20)',"
+                f"drawtext=fontfile={FONT_PATH}:"
                 f"text='@{username}':"
-                f"fontcolor=white@0.45:"
-                f"fontsize=24:"
-                f"shadowcolor=black@0.6:"
-                f"shadowx=2:shadowy=2:"
-                f"x='if(mod(t,6)<2,70,if(mod(t,6)<4,W-tw-70,70))':"
-                f"y='if(mod(t,6)<3,25,H-th-25)'"
+                "fontcolor=white@0.45:"
+                "fontsize=24:"
+                "shadowcolor=black@0.6:"
+                "shadowx=2:shadowy=2:"
+                "x='if(mod(t,6)<2,70,if(mod(t,6)<4,W-tw-70,70))':"
+                "y='if(mod(t,6)<3,25,H-th-25)'"
             ),
             "-c:v", "libx264",
             "-preset", "veryfast",
@@ -185,6 +184,8 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 
