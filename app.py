@@ -8,6 +8,9 @@ import shutil
 
 app = Flask(__name__)
 
+# -----------------------------
+# Paths & config
+# -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "fonts", "Roboto-Regular.ttf")
 LOGO_PATH = os.path.join(BASE_DIR, "tiktok_logo.png")
@@ -18,11 +21,17 @@ MOBILE_UA = (
     "Mobile/15E148 Safari/604.1"
 )
 
+# -----------------------------
+# Utils
+# -----------------------------
 def is_valid_tiktok_url(url: str) -> bool:
     return bool(re.search(r"(vm\.tiktok\.com|tiktok\.com)", url))
 
 
 def extract_username(url: str) -> str:
+    """
+    Extraction metadata légère (safe)
+    """
     import yt_dlp
     try:
         with yt_dlp.YoutubeDL({
@@ -31,11 +40,14 @@ def extract_username(url: str) -> str:
             "user_agent": MOBILE_UA,
         }) as ydl:
             info = ydl.extract_info(url, download=False)
-        return info.get("uploader") or "tiktok"
+        return info.get("uploader") or info.get("channel") or "tiktok"
     except Exception:
         return "tiktok"
 
 
+# -----------------------------
+# STREAM VIDEO WITH WATERMARK
+# -----------------------------
 @app.route("/tiktok/stream", methods=["POST"])
 def tiktok_stream():
     data = request.get_json(silent=True)
@@ -48,33 +60,40 @@ def tiktok_stream():
 
     username = extract_username(url)
 
+    # Dossier temporaire (/tmp sur Fly.io)
     temp_dir = tempfile.mkdtemp(prefix="tiktok_video_")
     input_video = os.path.join(temp_dir, "input.mp4")
     output_video = os.path.join(temp_dir, "output.mp4")
 
     try:
-        # 1️⃣ Téléchargement stable
-        subprocess.run(
-            [
-                sys.executable,
-                "-m", "yt_dlp",
-                "-f", "bv*+ba/b",
-                "--merge-output-format", "mp4",
-                "--no-part",
-                "--no-playlist",
-                "--user-agent", MOBILE_UA,
-                "-o", input_video,
-                url,
-            ],
+        # 1️⃣ Téléchargement STABLE (comme MP3)
+        download_cmd = [
+            sys.executable,
+            "-m", "yt_dlp",
+            "-f", "bestvideo+bestaudio/best",
+            "--no-part",
+            "--no-playlist",
+            "--user-agent", MOBILE_UA,
+            "-o", input_video,
+            url,
+        ]
+
+        result = subprocess.run(
+            download_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            check=True,
         )
+
+        if result.returncode != 0:
+            return jsonify({
+                "error": "TikTok blocked video download",
+                "details": result.stderr.decode(errors="ignore"),
+            }), 502
 
         if not os.path.exists(input_video) or os.path.getsize(input_video) < 1024:
             return jsonify({"error": "Downloaded video is empty"}), 500
 
-        # 2️⃣ Watermark façon TikTok
+        # 2️⃣ Watermark animé façon TikTok
         vf = (
             f"movie={LOGO_PATH}[logo];"
             "[in][logo]overlay="
@@ -90,27 +109,34 @@ def tiktok_stream():
             "y='if(mod(t,6)<3,60,H-th-60)'"
         )
 
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i", input_video,
-                "-vf", vf,
-                "-c:v", "libx264",
-                "-preset", "veryfast",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "copy",
-                output_video,
-            ],
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", input_video,
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            output_video,
+        ]
+
+        result = subprocess.run(
+            ffmpeg_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            check=True,
         )
 
-        if not os.path.exists(output_video) or os.path.getsize(output_video) < 1024:
-            return jsonify({"error": "Watermark rendering failed"}), 500
+        if result.returncode != 0:
+            return jsonify({
+                "error": "Watermark rendering failed",
+                "details": result.stderr.decode(errors="ignore"),
+            }), 500
 
-        # 3️⃣ Streaming depuis disque
+        if not os.path.exists(output_video) or os.path.getsize(output_video) < 1024:
+            return jsonify({"error": "Final video is empty"}), 500
+
+        # 3️⃣ Streaming depuis disque (safe Gunicorn / Fly.io)
         def generate():
             with open(output_video, "rb") as f:
                 while True:
@@ -130,12 +156,25 @@ def tiktok_stream():
         )
 
     finally:
+        # 4️⃣ Nettoyage garanti
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+# -----------------------------
+# Healthcheck
+# -----------------------------
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+# -----------------------------
+# Run (local)
+# -----------------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
