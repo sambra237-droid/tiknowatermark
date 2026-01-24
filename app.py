@@ -59,10 +59,10 @@ def tiktok_stream():
     input_video = os.path.join(temp_dir, "input.mp4")
     output_video = os.path.join(temp_dir, "output.mp4")
 
+    # -----------------------------
+    # 1️⃣ DOWNLOAD VIDEO
+    # -----------------------------
     try:
-        # -----------------------------
-        # 1️⃣ DOWNLOAD VIDEO (LOW RAM)
-        # -----------------------------
         download_cmd = [
             sys.executable,
             "-m", "yt_dlp",
@@ -83,13 +83,13 @@ def tiktok_stream():
         )
 
         if not os.path.exists(input_video) or os.path.getsize(input_video) < 1024:
+            shutil.rmtree(temp_dir, ignore_errors=True)
             return jsonify({"error": "Downloaded video is empty"}), 500
 
         # -----------------------------
-        # 2️⃣ WATERMARK (ANTI-OOM)
+        # 2️⃣ WATERMARK (FFmpeg SAFE)
         # -----------------------------
         filter_complex = (
-            # ↓↓↓ réduction résolution = RAM ÷ 2-3
             "[0:v]scale=540:-2[v0];"
             "[1:v]scale=40:-1[logo];"
             "[v0][logo]overlay="
@@ -109,12 +109,12 @@ def tiktok_stream():
             "ffmpeg",
             "-y",
             "-loglevel", "error",
-            "-threads", "1",              # 🔥 CRITIQUE (anti-OOM)
+            "-threads", "1",              # anti-OOM
             "-i", input_video,
             "-i", LOGO_PATH,
             "-filter_complex", filter_complex,
             "-c:v", "libx264",
-            "-preset", "ultrafast",       # 🔥 RAM minimale
+            "-preset", "ultrafast",
             "-tune", "zerolatency",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
@@ -130,18 +130,23 @@ def tiktok_stream():
         )
 
         if not os.path.exists(output_video) or os.path.getsize(output_video) < 1024:
+            shutil.rmtree(temp_dir, ignore_errors=True)
             return jsonify({"error": "Watermark encoding failed"}), 500
 
         # -----------------------------
-        # 3️⃣ STREAMING SAFE (Gunicorn)
+        # 3️⃣ STREAMING + CLEANUP SAFE
         # -----------------------------
         def generate():
-            with open(output_video, "rb") as f:
-                while True:
-                    chunk = f.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    yield chunk
+            try:
+                with open(output_video, "rb") as f:
+                    while True:
+                        chunk = f.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                # 🔥 cleanup APRES le streaming
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
         return Response(
             stream_with_context(generate()),
@@ -154,13 +159,11 @@ def tiktok_stream():
         )
 
     except subprocess.CalledProcessError as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify({
             "error": "Video processing failed",
             "details": e.stderr.decode(errors="ignore"),
         }), 500
-
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 # -----------------------------
@@ -177,6 +180,8 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 
