@@ -17,6 +17,8 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "Roboto-Regular.ttf")
 LOGO_PATH = os.path.join(ASSETS_DIR, "tiktok_logo.png")
 
+CHUNK_SIZE = 8192  # streaming safe
+
 # -----------------------------
 # UTILS
 # -----------------------------
@@ -25,7 +27,7 @@ def is_valid_tiktok_url(url: str) -> bool:
 
 
 def extract_username(url: str) -> str:
-    """Extraction légère, non bloquante"""
+    """Extraction légère, jamais bloquante"""
     try:
         import yt_dlp
         with yt_dlp.YoutubeDL({
@@ -39,7 +41,7 @@ def extract_username(url: str) -> str:
 
 
 # -----------------------------
-# VIDEO + WATERMARK
+# VIDEO STREAM + WATERMARK
 # -----------------------------
 @app.route("/tiktok/stream", methods=["POST"])
 def tiktok_stream():
@@ -53,14 +55,13 @@ def tiktok_stream():
 
     username = extract_username(url)
 
-    # Dossier temporaire (/tmp sur Fly.io)
     temp_dir = tempfile.mkdtemp(prefix="tiktok_video_")
     input_video = os.path.join(temp_dir, "input.mp4")
     output_video = os.path.join(temp_dir, "output.mp4")
 
     try:
         # -----------------------------
-        # 1️⃣ TÉLÉCHARGEMENT VIDÉO
+        # 1️⃣ DOWNLOAD VIDEO (LOW RAM)
         # -----------------------------
         download_cmd = [
             sys.executable,
@@ -79,46 +80,44 @@ def tiktok_stream():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
-            timeout=120,
         )
 
         if not os.path.exists(input_video) or os.path.getsize(input_video) < 1024:
             return jsonify({"error": "Downloaded video is empty"}), 500
 
         # -----------------------------
-        # 2️⃣ WATERMARK ANIMÉ (FFMPEG SAFE)
+        # 2️⃣ WATERMARK (ANTI-OOM)
         # -----------------------------
         filter_complex = (
+            # ↓↓↓ réduction résolution = RAM ÷ 2-3
+            "[0:v]scale=540:-2[v0];"
             "[1:v]scale=40:-1[logo];"
-            "[0:v][logo]overlay="
-            "x=20:y=20:"
-            "enable='between(mod(t,6),0,2)'"
-            "[v1];"
-            "[v1][logo]overlay="
-            "x=W-w-20:y=20:"
-            "enable='between(mod(t,6),2,4)'"
-            "[v2];"
-            "[v2][logo]overlay="
-            "x=20:y=H-h-20:"
-            "enable='between(mod(t,6),4,6)',"
-            f"drawtext=fontfile='{FONT_PATH}':"
+            "[v0][logo]overlay="
+            "x='if(mod(t,6)<2,20,if(mod(t,6)<4,W-w-20,20))':"
+            "y='if(mod(t,6)<3,20,H-h-20)',"
+            f"drawtext=fontfile={FONT_PATH}:"
             f"text='@{username}':"
             "fontcolor=white@0.45:"
-            "fontsize=24:"
+            "fontsize=22:"
             "shadowcolor=black@0.6:"
             "shadowx=2:shadowy=2:"
-            "x=70:y=25"
+            "x='if(mod(t,6)<2,70,if(mod(t,6)<4,W-tw-70,70))':"
+            "y='if(mod(t,6)<3,25,H-th-25)'"
         )
 
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
+            "-loglevel", "error",
+            "-threads", "1",              # 🔥 CRITIQUE (anti-OOM)
             "-i", input_video,
             "-i", LOGO_PATH,
             "-filter_complex", filter_complex,
             "-c:v", "libx264",
-            "-preset", "veryfast",
+            "-preset", "ultrafast",       # 🔥 RAM minimale
+            "-tune", "zerolatency",
             "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
             "-c:a", "copy",
             output_video,
         ]
@@ -128,25 +127,21 @@ def tiktok_stream():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
-            timeout=120,
         )
 
         if not os.path.exists(output_video) or os.path.getsize(output_video) < 1024:
             return jsonify({"error": "Watermark encoding failed"}), 500
 
         # -----------------------------
-        # 3️⃣ STREAMING FINAL (CLEANUP SAFE)
+        # 3️⃣ STREAMING SAFE (Gunicorn)
         # -----------------------------
         def generate():
-            try:
-                with open(output_video, "rb") as f:
-                    while True:
-                        chunk = f.read(8192)
-                        if not chunk:
-                            break
-                        yield chunk
-            finally:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+            with open(output_video, "rb") as f:
+                while True:
+                    chunk = f.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    yield chunk
 
         return Response(
             stream_with_context(generate()),
@@ -159,15 +154,13 @@ def tiktok_stream():
         )
 
     except subprocess.CalledProcessError as e:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify({
-            "error": "Video download or processing failed",
+            "error": "Video processing failed",
             "details": e.stderr.decode(errors="ignore"),
         }), 500
 
-    except subprocess.TimeoutExpired:
+    finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        return jsonify({"error": "Processing timeout"}), 504
 
 
 # -----------------------------
@@ -179,11 +172,13 @@ def health():
 
 
 # -----------------------------
-# RUN (LOCAL)
+# LOCAL RUN
 # -----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 
