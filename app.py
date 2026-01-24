@@ -89,32 +89,30 @@ def tiktok_stream():
         # 2️⃣ WATERMARK TikTok-LIKE (PRO)
         # -----------------------------
         filter_complex = (
-            "[0:v]scale=540:-2[v];"
-            "[v]"
-            "drawtext=fontfile={font}:"
-            "text='TikTok':"
+            "[0:v]scale=540:-2[v0];"
+
+            # --------- LOGO SIMULÉ (micro animation) ----------
+            f"drawtext=fontfile={FONT_PATH}:"
+            "text='♪ TikTok':"
             "fontcolor=white@0.35:"
-            "fontsize=h*0.038:"
-            "shadowcolor=black@0.5:"
+            "fontsize=h*0.040*(1+0.03*sin(t*3)):"  # micro scale animation
+            "shadowcolor=black@0.4:"
             "shadowx=1:shadowy=1:"
-            "x='if(between(mod(t,8),0,4),"
-            "40+sin(t*6)*2,"
-            "W-tw-40+sin(t*6)*2)':"
-            "y='H-th-60':"
-            "alpha='if(between(mod(t,8),0,3.6),1,0)':"
-            "[v1];"
-            "[v1]"
-            "drawtext=fontfile={font}:"
-            "text='@{user}':"
-            "fontcolor=white@0.30:"
+            "x='if(between(mod(t,8),0,3.5), 40, if(between(mod(t,8),5,8), W-tw-40, NAN))':"
+            "y='if(between(mod(t,8),0,3.5), H*0.55, if(between(mod(t,8),5,8), H*0.78, NAN))':"
+            "alpha='0.25 + 0.08*sin(t*4)':"  # breathing opacity
+            "enable='between(mod(t,8),0,3.5)+between(mod(t,8),5,8)',"
+
+            # --------- USERNAME ----------
+            f"drawtext=fontfile={FONT_PATH}:"
+            f"text='@{username}':"
+            "fontcolor=white@0.38:"
             "fontsize=h*0.032:"
             "shadowcolor=black@0.4:"
             "shadowx=1:shadowy=1:"
-            "x='if(between(mod(t,8),0,4),"
-            "40+sin(t*6)*2,"
-            "W-tw-40+sin(t*6)*2)':"
-            "y='H-th-32':"
-            "alpha='if(between(mod(t,8),0,3.6),1,0)'"
+            "x='if(between(mod(t,8),0,3.5), 40, if(between(mod(t,8),5,8), W-tw-40, NAN))':"
+            "y='if(between(mod(t,8),0,3.5), H*0.60, if(between(mod(t,8),5,8), H*0.83, NAN))':"
+            "enable='between(mod(t,8),0,3.5)+between(mod(t,8),5,8)'"
         ).format(
             font=FONT_PATH.replace("\\", "\\\\"),
             user=username.replace("'", "")
@@ -192,6 +190,7 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
