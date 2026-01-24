@@ -93,16 +93,16 @@ def tiktok_stream():
             "[0:v]scale=540:-2[v0];"
             "[1:v]scale=40:-1[logo];"
             "[v0][logo]overlay="
-            "x='if(mod(t,6)<2,20,if(mod(t,6)<4,W-w-20,20))':"
-            "y='if(mod(t,6)<3,20,H-h-20)',"
+            "x='20 + (W-w-40)*between(mod(t,6),2,4)':"
+            "y='20 + (H-h-40)*between(mod(t,6),3,6)',"
             f"drawtext=fontfile={FONT_PATH}:"
             f"text='@{username}':"
             "fontcolor=white@0.45:"
             "fontsize=22:"
             "shadowcolor=black@0.6:"
             "shadowx=2:shadowy=2:"
-            "x='if(mod(t,6)<2,70,if(mod(t,6)<4,W-tw-70,70))':"
-            "y='if(mod(t,6)<3,25,H-th-25)'"
+            "x='70 + (W-tw-140)*between(mod(t,6),2,4)':"
+            "y='25 + (H-th-50)*between(mod(t,6),3,6)'"
         )
 
         ffmpeg_cmd = [
@@ -177,6 +177,7 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
 
 
 
