@@ -15,7 +15,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "Roboto-Regular.ttf")
-LOGO_PATH = os.path.join(ASSETS_DIR, "tiktok_logo.png")
 
 CHUNK_SIZE = 8192  # streaming safe
 
@@ -59,10 +58,10 @@ def tiktok_stream():
     input_video = os.path.join(temp_dir, "input.mp4")
     output_video = os.path.join(temp_dir, "output.mp4")
 
-    # -----------------------------
-    # 1️⃣ DOWNLOAD VIDEO
-    # -----------------------------
     try:
+        # -----------------------------
+        # 1️⃣ DOWNLOAD VIDEO
+        # -----------------------------
         download_cmd = [
             sys.executable,
             "-m", "yt_dlp",
@@ -87,35 +86,49 @@ def tiktok_stream():
             return jsonify({"error": "Downloaded video is empty"}), 500
 
         # -----------------------------
-        # 2️⃣ WATERMARK (FFmpeg SAFE)
+        # 2️⃣ WATERMARK TikTok-LIKE (PRO)
         # -----------------------------
         filter_complex = (
-            "[0:v]scale=540:-2[v0];"
-            "[1:v]scale=40:-1[logo];"
-            "[v0][logo]overlay="
-            "x='20 + (W-w-40)*between(mod(t,6),2,4)':"
-            "y='20 + (H-h-40)*between(mod(t,6),3,6)',"
-            f"drawtext=fontfile={FONT_PATH}:"
-            f"text='@{username}':"
-            "fontcolor=white@0.45:"
-            "fontsize=22:"
-            "shadowcolor=black@0.6:"
-            "shadowx=2:shadowy=2:"
-            "x='70 + (W-tw-140)*between(mod(t,6),2,4)':"
-            "y='25 + (H-th-50)*between(mod(t,6),3,6)'"
+            "[0:v]scale=540:-2[v];"
+            "[v]"
+            "drawtext=fontfile={font}:"
+            "text='TikTok':"
+            "fontcolor=white@0.35:"
+            "fontsize=h*0.038:"
+            "shadowcolor=black@0.5:"
+            "shadowx=1:shadowy=1:"
+            "x='if(between(mod(t,8),0,4),"
+            "40+sin(t*6)*2,"
+            "W-tw-40+sin(t*6)*2)':"
+            "y='H-th-60':"
+            "alpha='if(between(mod(t,8),0,3.6),1,0)':"
+            "[v1];"
+            "[v1]"
+            "drawtext=fontfile={font}:"
+            "text='@{user}':"
+            "fontcolor=white@0.30:"
+            "fontsize=h*0.032:"
+            "shadowcolor=black@0.4:"
+            "shadowx=1:shadowy=1:"
+            "x='if(between(mod(t,8),0,4),"
+            "40+sin(t*6)*2,"
+            "W-tw-40+sin(t*6)*2)':"
+            "y='H-th-32':"
+            "alpha='if(between(mod(t,8),0,3.6),1,0)'"
+        ).format(
+            font=FONT_PATH.replace("\\", "\\\\"),
+            user=username.replace("'", "")
         )
 
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
             "-loglevel", "error",
-            "-threads", "1",              # anti-OOM
+            "-threads", "1",
             "-i", input_video,
-            "-i", LOGO_PATH,
             "-filter_complex", filter_complex,
             "-c:v", "libx264",
             "-preset", "ultrafast",
-            "-tune", "zerolatency",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             "-c:a", "copy",
@@ -145,7 +158,6 @@ def tiktok_stream():
                             break
                         yield chunk
             finally:
-                # 🔥 cleanup APRES le streaming
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
         return Response(
@@ -180,6 +192,8 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 
