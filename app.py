@@ -12,12 +12,12 @@ app = Flask(__name__)
 # CONFIG
 # -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+
 FONT_PATH = os.path.join(ASSETS_DIR, "fonts", "Roboto-Regular.ttf")
 LOGO_PATH = os.path.join(ASSETS_DIR, "tiktok_logo.png")
 
-CHUNK_SIZE = 8192  # streaming safe
+CHUNK_SIZE = 8192
 
 # -----------------------------
 # UTILS
@@ -27,13 +27,9 @@ def is_valid_tiktok_url(url: str) -> bool:
 
 
 def extract_username(url: str) -> str:
-    """Extraction légère, jamais bloquante"""
     try:
         import yt_dlp
-        with yt_dlp.YoutubeDL({
-            "quiet": True,
-            "skip_download": True,
-        }) as ydl:
+        with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True}) as ydl:
             info = ydl.extract_info(url, download=False)
             return info.get("uploader") or "tiktok"
     except Exception:
@@ -41,7 +37,7 @@ def extract_username(url: str) -> str:
 
 
 # -----------------------------
-# VIDEO STREAM + WATERMARK
+# STREAM VIDEO + WATERMARK
 # -----------------------------
 @app.route("/tiktok/stream", methods=["POST"])
 def tiktok_stream():
@@ -55,92 +51,80 @@ def tiktok_stream():
 
     username = extract_username(url)
 
-    temp_dir = tempfile.mkdtemp(prefix="tiktok_video_")
+    temp_dir = tempfile.mkdtemp(prefix="tiktok_")
     input_video = os.path.join(temp_dir, "input.mp4")
     output_video = os.path.join(temp_dir, "output.mp4")
 
     try:
         # -----------------------------
-        # 1️⃣ DOWNLOAD VIDEO (LOW RAM)
+        # 1️⃣ DOWNLOAD
         # -----------------------------
-        download_cmd = [
-            sys.executable,
-            "-m", "yt_dlp",
-            "-f", "bv*+ba/b",
-            "--merge-output-format", "mp4",
-            "--no-part",
-            "--no-playlist",
-            "--quiet",
-            "-o", input_video,
-            url,
-        ]
-
         subprocess.run(
-            download_cmd,
+            [
+                sys.executable,
+                "-m", "yt_dlp",
+                "-f", "bv*+ba/b",
+                "--merge-output-format", "mp4",
+                "--no-part",
+                "--no-playlist",
+                "--quiet",
+                "-o", input_video,
+                url,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
         )
 
-        if not os.path.exists(input_video) or os.path.getsize(input_video) < 1024:
-            return jsonify({"error": "Downloaded video is empty"}), 500
-
         # -----------------------------
-        # 2️⃣ WATERMARK (ANTI-OOM)
+        # 2️⃣ WATERMARK (FIXED)
         # -----------------------------
         filter_complex = (
-            # ↓↓↓ réduction résolution = RAM ÷ 2-3
-            "[0:v]scale=540:-2[v0];"
+            "[0:v]scale=540:-2[v];"
             "[1:v]scale=40:-1[logo];"
-            "[v0][logo]overlay="
-            "x='if(mod(t,6)<2,20,if(mod(t,6)<4,W-w-20,20))':"
-            "y='if(mod(t,6)<3,20,H-h-20)',"
-            f"drawtext=fontfile={FONT_PATH}:"
+            "[v][logo]overlay="
+            "x=if(mod(t\\,6)<2\\,20\\,if(mod(t\\,6)<4\\,W-w-20\\,20)):"
+            "y=if(mod(t\\,6)<3\\,20\\,H-h-20)"
+            "[v2];"
+            f"[v2]drawtext=fontfile={FONT_PATH}:"
             f"text='@{username}':"
             "fontcolor=white@0.45:"
             "fontsize=22:"
             "shadowcolor=black@0.6:"
             "shadowx=2:shadowy=2:"
-            "x='if(mod(t,6)<2,70,if(mod(t,6)<4,W-tw-70,70))':"
-            "y='if(mod(t,6)<3,25,H-th-25)'"
+            "x=if(mod(t\\,6)<2\\,70\\,if(mod(t\\,6)<4\\,W-tw-70\\,70)):"
+            "y=if(mod(t\\,6)<3\\,25\\,H-th-25)"
         )
 
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-y",
-            "-loglevel", "error",
-            "-threads", "1",              # 🔥 CRITIQUE (anti-OOM)
-            "-i", input_video,
-            "-i", LOGO_PATH,
-            "-filter_complex", filter_complex,
-            "-c:v", "libx264",
-            "-preset", "ultrafast",       # 🔥 RAM minimale
-            "-tune", "zerolatency",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            "-c:a", "copy",
-            output_video,
-        ]
-
         subprocess.run(
-            ffmpeg_cmd,
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel", "error",
+                "-threads", "1",
+                "-i", input_video,
+                "-i", LOGO_PATH,
+                "-filter_complex", filter_complex,
+                "-map", "[v2]",
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-c:a", "copy",
+                output_video,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
         )
 
-        if not os.path.exists(output_video) or os.path.getsize(output_video) < 1024:
-            return jsonify({"error": "Watermark encoding failed"}), 500
-
         # -----------------------------
-        # 3️⃣ STREAMING SAFE (Gunicorn)
+        # 3️⃣ STREAM
         # -----------------------------
         def generate():
             with open(output_video, "rb") as f:
-                while True:
-                    chunk = f.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
+                while chunk := f.read(CHUNK_SIZE):
                     yield chunk
 
         return Response(
@@ -149,7 +133,6 @@ def tiktok_stream():
             headers={
                 "Content-Disposition": "attachment; filename=tiktok_watermarked.mp4",
                 "Cache-Control": "no-store",
-                "Accept-Ranges": "none",
             },
         )
 
@@ -164,19 +147,18 @@ def tiktok_stream():
 
 
 # -----------------------------
-# HEALTHCHECK
+# HEALTH
 # -----------------------------
-@app.route("/health", methods=["GET"])
+@app.route("/health")
 def health():
     return jsonify({"status": "ok"})
 
 
-# -----------------------------
-# LOCAL RUN
-# -----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    app.run(host="0.0.0.0", port=port)
+
+
 
 
 
