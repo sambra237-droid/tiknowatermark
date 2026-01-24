@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # =========================
-# Installer curl-impersonate (ROBUSTE)
+# curl-impersonate
 # =========================
 RUN wget -O /tmp/curl-impersonate.tar.gz \
       https://github.com/lwthiker/curl-impersonate/releases/download/v0.6.1/curl-impersonate-v0.6.1.x86_64-linux-gnu.tar.gz \
@@ -21,7 +21,7 @@ RUN wget -O /tmp/curl-impersonate.tar.gz \
  && rm -rf /tmp/curl-impersonate*
 
 # =========================
-# Variables yt-dlp
+# yt-dlp
 # =========================
 ENV YTDLP_CURL="curl-impersonate-chrome"
 ENV YTDLP_NO_UPDATE=1
@@ -34,11 +34,16 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ⬇⬇⬇ LIGNE CRUCIALE ⬇⬇⬇
+COPY assets ./assets
+
 COPY app.py .
 
 EXPOSE 8080
 
 CMD ["gunicorn", "--workers", "1", "--threads", "4", "--bind", "0.0.0.0:8080", "app:app"]
+
+
 
 
 
