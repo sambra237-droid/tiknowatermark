@@ -60,7 +60,7 @@ def tiktok_stream():
 
     try:
         # -----------------------------
-        # 1️⃣ TÉLÉCHARGEMENT STABLE (IDENTIQUE MP3)
+        # 1️⃣ TÉLÉCHARGEMENT VIDÉO
         # -----------------------------
         download_cmd = [
             sys.executable,
@@ -79,34 +79,43 @@ def tiktok_stream():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
+            timeout=120,
         )
 
         if not os.path.exists(input_video) or os.path.getsize(input_video) < 1024:
             return jsonify({"error": "Downloaded video is empty"}), 500
 
         # -----------------------------
-        # 2️⃣ WATERMARK ANIMÉ (STYLE TIKTOK)
+        # 2️⃣ WATERMARK ANIMÉ (FFMPEG SAFE)
         # -----------------------------
+        filter_complex = (
+            "[1:v]scale=40:-1[logo];"
+            "[0:v][logo]overlay="
+            "x=20:y=20:"
+            "enable='between(mod(t,6),0,2)'"
+            "[v1];"
+            "[v1][logo]overlay="
+            "x=W-w-20:y=20:"
+            "enable='between(mod(t,6),2,4)'"
+            "[v2];"
+            "[v2][logo]overlay="
+            "x=20:y=H-h-20:"
+            "enable='between(mod(t,6),4,6)',"
+            f"drawtext=fontfile='{FONT_PATH}':"
+            f"text='@{username}':"
+            "fontcolor=white@0.45:"
+            "fontsize=24:"
+            "shadowcolor=black@0.6:"
+            "shadowx=2:shadowy=2:"
+            "x=70:y=25"
+        )
+
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
             "-i", input_video,
             "-i", LOGO_PATH,
-            "-filter_complex",
-            (
-                "[1:v]scale=40:-1[logo];"
-                "[0:v][logo]overlay="
-                "x='if(mod(t,6)<2,20,if(mod(t,6)<4,W-w-20,20))':"
-                "y='if(mod(t,6)<3,20,H-h-20)',"
-                f"drawtext=fontfile={FONT_PATH}:"
-                f"text='@{username}':"
-                "fontcolor=white@0.45:"
-                "fontsize=24:"
-                "shadowcolor=black@0.6:"
-                "shadowx=2:shadowy=2:"
-                "x='if(mod(t,6)<2,70,if(mod(t,6)<4,W-tw-70,70))':"
-                "y='if(mod(t,6)<3,25,H-th-25)'"
-            ),
+            "-filter_complex", filter_complex,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-pix_fmt", "yuv420p",
@@ -119,21 +128,25 @@ def tiktok_stream():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             check=True,
+            timeout=120,
         )
 
         if not os.path.exists(output_video) or os.path.getsize(output_video) < 1024:
             return jsonify({"error": "Watermark encoding failed"}), 500
 
         # -----------------------------
-        # 3️⃣ STREAMING FINAL (SAFE GUNICORN)
+        # 3️⃣ STREAMING FINAL (CLEANUP SAFE)
         # -----------------------------
         def generate():
-            with open(output_video, "rb") as f:
-                while True:
-                    chunk = f.read(8192)
-                    if not chunk:
-                        break
-                    yield chunk
+            try:
+                with open(output_video, "rb") as f:
+                    while True:
+                        chunk = f.read(8192)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
         return Response(
             stream_with_context(generate()),
@@ -146,13 +159,15 @@ def tiktok_stream():
         )
 
     except subprocess.CalledProcessError as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return jsonify({
             "error": "Video download or processing failed",
             "details": e.stderr.decode(errors="ignore"),
         }), 500
 
-    finally:
+    except subprocess.TimeoutExpired:
         shutil.rmtree(temp_dir, ignore_errors=True)
+        return jsonify({"error": "Processing timeout"}), 504
 
 
 # -----------------------------
@@ -169,6 +184,8 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
+
+
 
 
 
